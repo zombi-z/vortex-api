@@ -4,26 +4,26 @@ import random
 import string
 
 app = Flask(__name__)
-
-# This is our temporary database (it resets when the server restarts)
 DATABASE = {} 
 ADMIN_PASSWORD = "VORTEX_ADMIN_123"
 
-# Helper function to generate a random key
 def generate_key_string():
     return "VORTEX-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4)) + "-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
-# 1. ENDPOINT: Generate a new key (Admin Only)
 @app.route('/generate', methods=['POST'])
 def generate_key():
     data = request.json
     if data.get('password') != ADMIN_PASSWORD:
         return jsonify({"error": "Unauthorized"}), 403
     
-    days = int(data.get('days', 1)) 
-    new_key = generate_key_string()
+    days = int(data.get('days', 0))
+    minutes = int(data.get('minutes', 0))
     
-    expires_at = datetime.now() + timedelta(days=days)
+    if days == 0 and minutes == 0:
+        days = 1
+        
+    new_key = generate_key_string()
+    expires_at = datetime.now() + timedelta(days=days, minutes=minutes)
     
     DATABASE[new_key] = {
         "expires": expires_at.isoformat(),
@@ -36,7 +36,6 @@ def generate_key():
         "expires": expires_at.strftime("%Y-%m-%d %H:%M:%S")
     })
 
-# 2. ENDPOINT: Verify a key (Used by your Loader)
 @app.route('/verify', methods=['POST'])
 def verify_key():
     data = request.json
@@ -57,12 +56,11 @@ def verify_key():
         
     if key_data["hwid"] is None:
         key_data["hwid"] = user_hwid
-        return jsonify({"success": True, "message": "Key activated and bound to your PC!"})
+        return jsonify({"success": True, "message": "Key activated!"})
     elif key_data["hwid"] != user_hwid:
         return jsonify({"error": "Key is locked to another PC"}), 403
         
     return jsonify({"success": True, "message": "Welcome back!"})
 
 if __name__ == '__main__':
-    print("Vortex API is running on port 5000...")
     app.run(port=5000)
