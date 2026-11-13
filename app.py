@@ -2,17 +2,22 @@ from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 import random
 import string
+import smtplib
+from email.mime.text import MIMEText
 
 app = Flask(__name__)
 
-# Temporary database (resets on server restart)
+# Temporary database
 DATABASE = {} 
 ADMIN_PASSWORD = "VORTEX_ADMIN_123"
+
+# --- EMAIL CONFIGURATION ---
+SENDER_EMAIL = "vortex.support.app@gmail.com" # <--- PUT YOUR GMAIL HERE
+SENDER_PASSWORD = "ofjqrrhjswdxtaxl"       # <--- PUT YOUR NEW APP PASSWORD HERE (No spaces)
 
 def generate_key_string():
     return "VORTEX-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4)) + "-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
-# 1. ENDPOINT: Generate key (Used by your Discord Bot)
 @app.route('/generate', methods=['POST'])
 def generate_key():
     data = request.json
@@ -34,7 +39,6 @@ def generate_key():
         "expires": expires_at.strftime("%Y-%m-%d %H:%M:%S")
     })
 
-# 2. ENDPOINT: Verify key (Used by your Loader)
 @app.route('/verify', methods=['POST'])
 def verify_key():
     data = request.json
@@ -61,34 +65,23 @@ def verify_key():
         
     return jsonify({"success": True, "message": "Welcome back!"})
 
-# 3. ENDPOINT: Sellix Webhook (Auto-delivery)
 @app.route('/webhook/purchase', methods=['POST'])
 def purchase_webhook():
     data = request.json
     
-    # Only process paid orders
     if data.get('event') != 'order.paid':
         return jsonify({"success": True, "message": "Ignored"}), 200
 
     order_data = data.get('data', {})
-    
-    # Extract email and price
     buyer_email = order_data.get('customer', {}).get('email', 'unknown@email.com')
-    amount = order_data.get('amount', 100) # Price in cents
+    amount = order_data.get('amount', 100) 
     
-    # Determine duration based on price
-    if amount == 100:
-        days = 1
-    elif amount == 500:
-        days = 7
-    elif amount == 1000:
-        days = 30
-    elif amount >= 3000:
-        days = 36500 # Lifetime
-    else:
-        days = 1 # Default fallback
+    if amount == 100: days = 1
+    elif amount == 500: days = 7
+    elif amount == 1000: days = 30
+    elif amount >= 3000: days = 36500
+    else: days = 1
         
-    # Generate Key
     new_key = generate_key_string()
     expires_at = datetime.now() + timedelta(days=days)
     
@@ -97,12 +90,22 @@ def purchase_webhook():
         "hwid": None 
     }
     
-    print(f"\n==========================================")
-    print(f"[+] NEW SALE RECEIVED!")
-    print(f"[+] Email: {buyer_email}")
-    print(f"[+] Price: {amount / 100}")
-    print(f"[+] Generated Key: {new_key}")
-    print(f"==========================================\n")
+    print(f"[+] NEW SALE! Generated {new_key} for {buyer_email}")
+    
+    # --- SEND EMAIL ---
+    if buyer_email != 'unknown@email.com':
+        msg = MIMEText(f"Thank you for purchasing Vortex!\n\nYour License Key: {new_key}\nExpires: {expires_at.strftime('%Y-%m-%d')}\n\nDownload the loader and paste this key to inject.")
+        msg['Subject'] = "Your Vortex License Key"
+        msg['From'] = SENDER_EMAIL
+        msg['To'] = buyer_email
+        
+        try:
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                server.login(SENDER_EMAIL, SENDER_PASSWORD)
+                server.send_message(msg)
+            print(f"[+] Successfully emailed key to {buyer_email}")
+        except Exception as e:
+            print(f"[!] Failed to email: {e}")
     
     return jsonify({"success": True, "key": new_key})
 
