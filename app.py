@@ -1,66 +1,56 @@
-from flask import Flask, request, jsonify
-from datetime import datetime, timedelta
-import random
-import string
+from flask import request
+import smtplib
+from email.mime.text import MIMEText
+import os
 
-app = Flask(__name__)
-DATABASE = {} 
-ADMIN_PASSWORD = "VORTEX_ADMIN_123"
-
-def generate_key_string():
-    return "VORTEX-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4)) + "-" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
-
-@app.route('/generate', methods=['POST'])
-def generate_key():
+# Add this endpoint for the Sellix/Stripe webhook
+@app.route('/webhook/purchase', methods=['POST'])
+def purchase_webhook():
     data = request.json
-    if data.get('password') != ADMIN_PASSWORD:
-        return jsonify({"error": "Unauthorized"}), 403
     
-    days = int(data.get('days', 0))
-    minutes = int(data.get('minutes', 0))
+    # This is the secret password Sellix will send so we know it's real
+    if data.get('secret') != "VORTEX_WEBHOOK_SECRET":
+        return jsonify({"error": "Unauthorized"}), 401
     
-    if days == 0 and minutes == 0:
-        days = 1
-        
+    # Get the buyer's email and the product they bought from the webhook payload
+    # (Note: You will need to adjust these keys to match Sellix's actual JSON payload)
+    buyer_email = data.get('customer_email')
+    product_name = data.get('product_title', 'Vortex')
+    
+    # Determine how many days the key should be based on the product name
+    days = 1
+    if "Week" in product_name:
+        days = 7
+    elif "Month" in product_name:
+        days = 30
+    elif "Lifetime" in product_name:
+        days = 36500 # 100 years
+    
+    # Generate the key using our existing function
     new_key = generate_key_string()
-    expires_at = datetime.now() + timedelta(days=days, minutes=minutes)
+    expires_at = datetime.now() + timedelta(days=days)
     
     DATABASE[new_key] = {
         "expires": expires_at.isoformat(),
         "hwid": None 
     }
     
-    return jsonify({
-        "success": True, 
-        "key": new_key, 
-        "expires": expires_at.strftime("%Y-%m-%d %H:%M:%S")
-    })
-
-@app.route('/verify', methods=['POST'])
-def verify_key():
-    data = request.json
-    user_key = data.get('key')
-    user_hwid = data.get('hwid')
+    # --- SEND THE EMAIL ---
+    # (You need a Gmail account with an App Password for this to work)
+    SENDER_EMAIL = "your_email@gmail.com"
+    SENDER_PASSWORD = "your_16_letter_app_password"
     
-    if not user_key or not user_hwid:
-        return jsonify({"error": "Missing key or HWID"}), 400
-        
-    if user_key not in DATABASE:
-        return jsonify({"error": "Invalid key"}), 404
-        
-    key_data = DATABASE[user_key]
+    msg = MIMEText(f"Thank you for purchasing Vortex!\n\nYour License Key: {new_key}\nExpires: {expires_at.strftime('%Y-%m-%d')}\n\nDownload the loader from your dashboard and paste this key.")
+    msg['Subject'] = "Your Vortex License Key"
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = buyer_email
     
-    expires_at = datetime.fromisoformat(key_data["expires"])
-    if datetime.now() > expires_at:
-        return jsonify({"error": "Key expired"}), 403
-        
-    if key_data["hwid"] is None:
-        key_data["hwid"] = user_hwid
-        return jsonify({"success": True, "message": "Key activated!"})
-    elif key_data["hwid"] != user_hwid:
-        return jsonify({"error": "Key is locked to another PC"}), 403
-        
-    return jsonify({"success": True, "message": "Welcome back!"})
-
-if __name__ == '__main__':
-    app.run(port=5000)
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.send_message(msg)
+        print(f"[+] Emailed key {new_key} to {buyer_email}")
+    except Exception as e:
+        print(f"[!] Failed to email key: {e}")
+    
+    return jsonify({"success": True, "key": new_key})
